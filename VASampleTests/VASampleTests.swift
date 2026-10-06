@@ -9,11 +9,10 @@ import Testing
 @testable import VASample
 
 struct VASampleTests {
-
-    @Test func example() async throws {
-        // Write your test here and use APIs like `#expect(...)` to check expected conditions.
-        // Swift Testing Documentation
-        // https://developer.apple.com/documentation/testing
+    @Test func liveServicesShareOneTokenStore() async {
+        let tokenStore = TokenStore()
+        let services = APIServices.live(tokenStore: tokenStore)
+        await services.auth.logout()
+        #expect(await tokenStore.accessToken == nil)
     }
-
 }
