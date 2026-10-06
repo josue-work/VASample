@@ -74,7 +74,6 @@ jobs:
             -destination "id=${{ steps.sim.outputs.udid }}" \
             -only-testing:VASampleTests \
             -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
-            CODE_SIGNING_ALLOWED=NO \
             | tee xcodebuild.log
 
       - name: Upload test results
