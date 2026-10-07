@@ -144,9 +144,10 @@ The API says to show times as returned, for the venue, not converted to the devi
 
 ## AI usage
 
-- **Where I used it:** I used Claude Code throughout. It scaffolded the network layer from the swagger spec, probed the live API to find where it differs from the docs, reviewed my code against this brief, and helped with `TimetableStore`, the test suite and a first draft of this README.
+- **Where I used it:** I used Claude Code while doing this assessment. It created my models and API services from the swagger spec using a skill and example I created to produce the network layer, I used it to probe the live API to find where it differs from the docs(such as date ntot working as documented for Timetable endpoint), reviewed my code against this brief, and helped with `TimetableStore`, the test suite and a first draft of this README.
 - **What I accepted vs rejected:**
-  - I designed my own view model pattern (protocol + `ObservableObject` + mocks) for SignInView and query the LLM to create view models for my other views.
+  - I added CI for my repo using LLMs.
+  - I designed my own view model pattern (protocol + `ObservableObject` + mocks) for SignInView, then I queried the LLM to create view models for my other views.
   - I turned down a 60-second cache TTL in favour of refreshing when the Classes tab opens, and then removed the cache clearing it added when Home opens. The server is the source of truth, and the booking POST is the real check.
   - I made the details view model take a full `ClassInstance` rather the suggested than IDs, so the timetable doesn't refetch a class it already has (reducing API calls).
   - I kept it from adding comments everywhere.
