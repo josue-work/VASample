@@ -107,16 +107,17 @@ struct APIClientTests {
         #expect(await expirations.next() != nil)
     }
 
-    @Test func refreshSurvivesAChaosFailure() async throws {
+    @Test func refreshIsNotRetriedAndAChaosFailureKeepsTheSession() async throws {
         StubURLProtocol.reset([
             .init(status: 401, body: "{}"),
-            .init(status: 500, body: chaosJSON),
-            .init(status: 200, body: tokensJSON),
-            .init(status: 200, body: profileJSON)
+            .init(status: 500, body: chaosJSON)
         ])
         let client = makeClient()
-        _ = try await client.send(.me, as: UserProfile.self)
-        #expect(await client.tokenStore.accessToken == "new-access")
+        await #expect(throws: APIError.self) {
+            _ = try await client.send(.me, as: UserProfile.self)
+        }
+        #expect(StubURLProtocol.requests.map(\.url?.path) == ["/me", "/auth/refresh"])
+        #expect(await client.tokenStore.tokens?.refreshToken == "refresh")
     }
 
     @Test func decodesTheServerErrorBody() async {

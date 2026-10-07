@@ -27,8 +27,9 @@ nonisolated extension Endpoint {
         Endpoint(path: "/auth/login", method: .post, body: try JSONEncoder().encode(request), requiresAuth: false)
     }
 
+    // Not retried: refresh tokens rotate, so if a failed attempt was processed, a retry sends a spent token and ends the session.
     static func refresh(_ request: RefreshRequest) throws -> Endpoint {
-        Endpoint(path: "/auth/refresh", method: .post, body: try JSONEncoder().encode(request), requiresAuth: false, isRetryable: true)
+        Endpoint(path: "/auth/refresh", method: .post, body: try JSONEncoder().encode(request), requiresAuth: false)
     }
 
     static let me = Endpoint(path: "/me", isRetryable: true)

@@ -16,8 +16,8 @@ nonisolated struct UserProfile: Decodable, Sendable, Identifiable, Equatable {
     let homeClub: ClubSummary
 }
 
-nonisolated enum MembershipTier: String, Decodable, Sendable {
-    case essential, premium, club
+nonisolated enum MembershipTier: String, Sendable, UnknownCaseDecodable {
+    case essential, premium, club, unknown
 }
 
 nonisolated struct ClubSummary: Decodable, Sendable, Identifiable, Equatable {
