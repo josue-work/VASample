@@ -1,6 +1,6 @@
 # VASample: Virgin Active iOS take-home
 
-A small SwiftUI client for the Virgin Active mock API. You can sign in, see a home screen the server builds for you, book a class (or join the waitlist), set a reminder, and browse the week's timetable.
+A small SwiftUI client for the Virgin Active mock API. You can sign in, see a home screen the server builds for you, book a class (or join the waitlist), set a reminder or add it to your calendar, and browse the week's timetable.
 
 I focused on the integration: tokens, retries, defensive parsing, and keeping the server as the source of truth. The UI is deliberately simple.
 
@@ -19,7 +19,7 @@ I focused on the integration: tokens, retries, defensive parsing, and keeping th
 
 The server speaks plain HTTP. `VASample-Info.plist` allows local networking (`NSAllowsLocalNetworking`) and includes the local network usage description for real devices. Nothing else is relaxed.
 
-**Tests:** run `⌘U` in Xcode, or:
+**Tests:** run `⌘U` in Xcode (it also runs the template UI test target), or just the unit tests:
 ```sh
 xcodebuild test -project VASample.xcodeproj -scheme VASample \
   -destination 'platform=iOS Simulator,name=<your iOS 27 simulator>' \
@@ -33,23 +33,26 @@ The tests don't need the server running. Networking is tested through a stubbed 
 
 ```
 Views (SwiftUI)  ->  ViewModels (protocol + live + mock)
-                          |
-          +---------------+---------------+
-          |                               |
-   TimetableStore (actor)          ReminderScheduler
-   cache + booking rules           local notifications
-          |
-   ClassesAPI / HomeAPI / ProfileAPI / AuthAPI
-          |
-   APIClient  <->  TokenStore (actor)
-   retries, refresh,     tokens, refresh coalescing,
-   error decoding        session expiry
+   |                      |
+   |      +---------------+----------------+-------------------+
+   |      |                                |                   |
+   |   TimetableStore (actor)       ReminderScheduler      VenueStore
+   |   cache + booking rules        local notifications    home club for the session
+   |      |
+   |   ClassesAPI / HomeAPI / ProfileAPI / AuthAPI
+   |      |
+   |   APIClient  <->  TokenStore (actor)  <->  KeychainTokenStorage
+   |   retries, refresh,   refresh coalescing,      tokens saved as JSON
+   |   error decoding      session expiry
+   |
+AddToCalendarView (EventKitUI)
+system event editor, no permission
 ```
 
 - **Modules** (`Modules/Auth`, `Home`, `Classes`, `Classes Details`, `TabBar`): one folder per feature, with views and view models side by side.
 - **View models:** each screen's view model sits behind a protocol, with a live implementation and a mock. Views are generic over the protocol, so every preview runs on mock data and never touches the network.
-- **Dependencies:** all dependencies come in through `init` as protocols (`AuthAPIProtocol`, `TimetableStoreProtocol`, `ReminderSchedulerProtocol`…). That's also what makes the view models easy to test.
-- **Navigation:** `AppRouter` owns the top-level route (sign-in or tabs) and the selected tab. Each tab has its own `NavigationStack`.
+- **Dependencies:** all dependencies come in through `init` as protocols (`AuthAPIProtocol`, `TimetableStoreProtocol`, `ReminderSchedulerProtocol`, `VenueStoreProtocol`, `TokenStorageProtocol`…). That's also what makes the view models easy to test.
+- **Navigation:** `AppRouter` owns the top-level route (a launch screen while the saved session is checked, sign-in, or tabs) and the selected tab. Each tab has its own `NavigationStack`.
 - **Errors:** everything the user sees goes through `UIError` and a single `.errorAlert($error)` modifier. Retry is only offered when it's safe (see below).
 
 ---
@@ -59,12 +62,12 @@ Views (SwiftUI)  ->  ViewModels (protocol + live + mock)
 ### Tokens
 - **Access token:** short-lived (`expiresIn: 300`). On a 401, `APIClient` refreshes once and replays the request with the new token.
 - **Refresh tokens rotate**, so two requests refreshing at the same time would lock each other out. `TokenStore` is an actor that coalesces refreshes: concurrent 401s share one refresh call. If another request already rotated the token, the store returns the new one without refreshing again.
-- **No logout on a chaos 500.** The server throws `ChaosFailure` 500s at random, refresh included. I only sign the user out when the server actually rejects the refresh token. A 500 on refresh is retried and, if it keeps failing, shown as a normal error, with the user still signed in.
+- **No logout on a chaos 500.** The server throws `ChaosFailure` 500s at random, refresh included. I only sign the user out when the server actually rejects the refresh token. A 500 on refresh is shown as a normal error and the user stays signed in. I deliberately don't retry `/auth/refresh`: refresh tokens rotate, so if the server already processed a failed-looking attempt, a retry would send a spent token and end the session.
 - **Session expiry:** when the session really is gone, `TokenStore` emits on `sessionExpirations`. The app clears the cached timetable and goes back to sign-in with a "Session expired" message.
 - **Staying signed in:** tokens are saved to the Keychain as a JSON string (`KeychainTokenStorage`, available after first unlock and on this device only). `TokenStore` loads them when it's created. On launch the app shows a spinner, and if there are saved tokens it refreshes straight away, because a 300-second access token is almost certainly expired by then. If the refresh works you land on Home; if it doesn't, you get the sign-in screen. If the server rejected the saved refresh token, you also get a "Session expired" message. Logging out wipes the Keychain entry.
 
 ### Retries, and why booking is different
-- **GETs** (`/me`, manifest, timetable) are retried in `APIClient` on 5xx and 429: up to 2 retries with exponential backoff.
+- **GETs** (`/me`, manifest, timetable) are retried in `APIClient` on 5xx and 429: up to 2 retries with exponential backoff. `/auth/refresh` isn't (see Tokens).
 - **POST and DELETE are never retried blindly.** If a booking request 500s, I can't tell whether it landed.
 - **Booking retries live in `TimetableStore`,** which understands the domain. It retries transient failures, and on a retry it treats `409 AlreadyBooked`/`AlreadyWaitlisted` as "the first attempt worked". Cancel does the same with `404 BookingNotFound`.
 - The view model never gets a blind "Retry" button for booking, because the store has already done the safe version.
@@ -73,13 +76,14 @@ Views (SwiftUI)  ->  ViewModels (protocol + live + mock)
 - **Block types:** `HomeBlockType` is the discriminator. `HomeBlock` is an enum with a typed model per block.
 - **Defensive parsing:** the spec only lists block type names, so I built the models from real responses for both users and made fields optional where they differ (the swimmer's goal has only `id` and `title`).
 - **Unknown and broken blocks** are skipped individually instead of failing the whole manifest, as the spec asks. Unknown carousel actions decode to `.unsupported` instead of throwing.
+- **Lenient enums:** unknown class types, class statuses, booking statuses and membership tiers decode as `.unknown` instead of failing the whole timetable or sign-in, and a malformed class is skipped on its own. A class with an unknown booking status can't be cancelled or get a reminder.
 - **`experimental`** isn't part of `HomeBlockType`, so it's skipped like any unknown block. There's nothing to render yet, so I didn't model it.
 - **Rendering:** the home screen draws whatever comes back, in the server's order. Badges ("Booked", "Waitlisted") come from the server too. After a booking I reload the manifest instead of writing badge text myself.
 
 ### Data: one store for the week
 - **The endpoint:** the timetable endpoint returns the whole week whatever `date` you pass (it only changes `selectedDate`). So one fetch covers every class in the home carousel.
 - **`TimetableStore`** is an actor that caches the week per club and shares in-flight requests. Booking and cancelling write the server's answer back into it, so Home and Classes stay consistent.
-- **Freshness:** there's no TTL. Opening the Classes tab force-refreshes the store, Home uses what's cached, and the booking POST is the final check. If a class filled up in the meantime, the server answers with a waitlist place and the screen updates from that response. Logout clears the store, because `userBookingStatus` is per user.
+- **Freshness:** there's no TTL. Opening the Classes tab force-refreshes the store, Home uses what's cached, and the booking POST is the final check. If a class filled up in the meantime, the server answers with a waitlist place and the screen updates from that response. Logout clears the store, because `userBookingStatus` is per user. It also cancels any timetable fetch still in flight, so a response that lands after logout can't put the previous user's week back into the cache.
 - **Carousel items:** they only carry a summary (no availability, status or end time). Tapping one resolves the full class from the store, so the confirmation screen has real data and the details view model only ever takes a `ClassInstance`. The Classes tab already has the instance, so it doesn't pay for a second lookup.
 
 ### Venue time
@@ -94,8 +98,8 @@ The API says to show times as returned, for the venue, not converted to the devi
 - **How I read "confirmation screen":** I read it as the screen you confirm on before anything is sent.
 - **The flow:** tap a class (from Home or the timetable) → details screen → **Book** / **Join Waitlist** → confirm alert → POST. The same screen then switches to its confirmed state, with the booking ID or your waitlist position, the reminder, and cancel.
 - **Cancelling** asks for confirmation too. If the class starts within 12 hours, the confirmation includes the forfeit warning, and the screen shows it as a banner.
-- **Reminders** are local notifications 30 minutes before the class. I only ask for notification permission when you tap Set Reminder. Cancelling the booking removes the reminder.
-- **Add to calendar** opens the system event editor (`EKEventEditViewController`), pre-filled with the class, the venue's time zone, the club's name and address as the location, the club's phone number in the notes, and a 30-minute alert. On iOS 17+ that editor runs without calendar permission, so the app never asks for it and has no calendar keys in the Info.plist.
+- **Reminders** are local notifications 30 minutes before the class. I only ask for notification permission when you tap Set Reminder. Tapping the reminder banner lets you cancel just the reminder, and cancelling the booking removes it too.
+- **Add to calendar** (the calendar button on the details screen) opens the system event editor from EventKitUI (`EKEventEditViewController`, wrapped in `AddToCalendarView`), pre-filled with the class, the venue's time zone, the club's name and address as the location, the club's phone number in the notes, and a 30-minute alert. On iOS 17+ that editor runs without calendar permission, so the app never asks for it and has no calendar keys in the Info.plist.
 - **The club comes from the home manifest.** The class model only has a club ID, but the `myClub` block has the name, address and phone number. Home saves it into a session-wide `VenueStore` when the manifest loads, and both Home and Classes pass it to the details screen. It's cleared on logout and session expiry, because each user has a different home club.
 - **No local "added to calendar" state.** Nothing from the server covers it, and without permission the app can't see whether the event is still there, so a stored flag could be wrong. The button stays the same, and you can add the class again if you want.
 
@@ -132,13 +136,15 @@ The API says to show times as returned, for the venue, not converted to the devi
 
 ## Tests
 
-137 test cases (Swift Testing), focused on what I'd least want to break:
+141 test cases (Swift Testing), focused on what I'd least want to break:
 
-- **`APIClient`:** bearer header, no network call without a token, GET retries on chaos 500s, POST never retried, refresh-and-replay on 401, a rejected refresh expiring the session, a refresh surviving a 500, error body and decoding failures.
+- **`APIClient`:** bearer header, no network call without a token, GET retries on chaos 500s, POST never retried, refresh-and-replay on 401, a rejected refresh expiring the session, a 500 on refresh not being retried and keeping the session, error body and decoding failures.
 - **`TokenStore` and Keychain:** concurrent refreshes share one call, an already-rotated token is reused, a 500 keeps the session, a 401 ends it. Tokens are loaded on creation and saved on sign-in, rotation and sign-out, and the Keychain round trip is tested. Restoring a saved session at launch is covered for a successful refresh, a rejected one, and nothing saved.
-- **`TimetableStore`:** caching, shared fetches, lookups served from the week, bookings applied to the cache, 500 → retry, 409/404 on a retry treated as success, a 409 on the first attempt treated as a real error, giving up after max retries, the local fallback when the refetch after a cancel fails.
-- **Decoding:** unknown, malformed and experimental blocks skipped, optional fields, unsupported actions, `VenueDate` keeping the offset and rendering venue time.
-- **View models:** sign-in validation (password rules are left to the server) and error messages, home loading/retry/class lookup/double-tap guard/logout, the timetable keeping your selected day, and the booking rules on details (can book/cancel, 12-hour window, waitlist, recovered bookings, reminders 30 minutes before, permission denied, calendar pre-fill).
+- **`TimetableStore`:** caching, shared fetches, lookups served from the week, bookings applied to the cache, 500 → retry, 409/404 on a retry treated as success, a 409 on the first attempt treated as a real error, giving up after max retries, the local fallback when the refetch after a cancel fails, and a fetch that was in flight during logout being discarded.
+- **Decoding:** unknown, malformed and experimental blocks skipped, optional fields, unsupported actions, unknown enum values decoding as `.unknown`, malformed classes skipped individually, an unknown membership tier not blocking sign-in, and `VenueDate` keeping the offset and rendering venue time.
+- **View models:** sign-in validation (password rules are left to the server) and error messages, home loading/retry/class lookup/double-tap guard/logout, the timetable keeping your selected day, and the booking rules on details (can book/cancel, 12-hour window, waitlist, recovered bookings, reminders 30 minutes before, permission denied, removing a reminder with notifications off, calendar pre-fill including the club's address and phone).
+
+**CI:** a GitHub Actions workflow (`.github/workflows/unit-tests.yml`) runs the unit tests on every push to `main` and on pull requests. GitHub's hosted runners don't have Xcode 27 yet, so it runs on a self-hosted Mac, and it never runs for pull requests from forks.
 
 ---
 
