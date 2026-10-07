@@ -34,11 +34,11 @@ import Combine
     }
 
     var canCancel: Bool {
-        classInstance.userBookingStatus != .none && !hasStarted && !isProcessing
+        classInstance.userBookingStatus.holdsPlace && !hasStarted && !isProcessing
     }
 
     var canSetReminder: Bool {
-        classInstance.userBookingStatus != .none && !hasReminder && reminderDate > .now && !isProcessing
+        classInstance.userBookingStatus.holdsPlace && !hasReminder && reminderDate > .now && !isProcessing
     }
 
     func book() async {

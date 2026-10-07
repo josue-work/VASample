@@ -20,6 +20,21 @@ nonisolated struct TimetableDay: Decodable, Sendable, Identifiable, Hashable {
     let classes: [ClassInstance]
 
     var id: String { date }
+
+    private enum CodingKeys: String, CodingKey {
+        case date, classes
+    }
+
+    init(date: String, classes: [ClassInstance]) {
+        self.date = date
+        self.classes = classes
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        date = try container.decode(String.self, forKey: .date)
+        classes = try container.decode([Lossy<ClassInstance>].self, forKey: .classes).compactMap(\.value)
+    }
 }
 
 nonisolated struct ClassInstance: Decodable, Sendable, Identifiable, Equatable, Hashable {
@@ -40,16 +55,20 @@ nonisolated struct ClassInstance: Decodable, Sendable, Identifiable, Equatable, 
     var id: String { classId }
 }
 
-nonisolated enum ClassType: String, Decodable, Sendable {
-    case groupWorkout, yoga, spin, pilates, hiit, swimming
+nonisolated enum ClassType: String, Sendable, UnknownCaseDecodable {
+    case groupWorkout, yoga, spin, pilates, hiit, swimming, unknown
 }
 
-nonisolated enum ClassStatus: String, Decodable, Sendable {
-    case available, full, cancelled
+nonisolated enum ClassStatus: String, Sendable, UnknownCaseDecodable {
+    case available, full, cancelled, unknown
 }
 
-nonisolated enum UserBookingStatus: String, Decodable, Sendable {
-    case none, booked, waitlisted
+nonisolated enum UserBookingStatus: String, Sendable, UnknownCaseDecodable {
+    case none, booked, waitlisted, unknown
+
+    var holdsPlace: Bool {
+        self == .booked || self == .waitlisted
+    }
 }
 
 nonisolated struct BookingResponse: Decodable, Sendable {

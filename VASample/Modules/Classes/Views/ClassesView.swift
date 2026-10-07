@@ -114,7 +114,7 @@ struct ClassesView<ViewModel: ClassesViewModelProtocol>: View {
             return StatusChip(text: "Booked", foreground: .white, background: .green)
         case .waitlisted:
             return StatusChip(text: "Waitlisted", foreground: .white, background: .orange)
-        case .none:
+        case .none, .unknown:
             break
         }
         if myClass.endsAt.date <= .now {

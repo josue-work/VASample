@@ -25,6 +25,7 @@ actor TimetableStore: TimetableStoreProtocol {
     private let maxRetries: Int
     private var timetables: [String: TimetableResponse] = [:]
     private var inFlight: [String: Task<TimetableResponse, Error>] = [:]
+    private var generation = 0
 
     init(service: ClassesAPIProtocol, maxRetries: Int = 2) {
         self.service = service
@@ -35,19 +36,25 @@ actor TimetableStore: TimetableStoreProtocol {
         if !forceRefresh, let cached = timetables[clubId] {
             return cached
         }
-        if let task = inFlight[clubId] {
-            return try await task.value
+        let generation = self.generation
+        let task = inFlight[clubId] ?? fetch(clubId: clubId)
+        defer {
+            if inFlight[clubId] == task { inFlight[clubId] = nil }
         }
 
+        let timetable = try await task.value
+        // Invalidated while in flight: the result belongs to the previous session, so don't cache it.
+        guard generation == self.generation else { throw CancellationError() }
+        timetables[clubId] = timetable
+        return timetable
+    }
+
+    private func fetch(clubId: String) -> Task<TimetableResponse, Error> {
         let task = Task { [service] in
             try await service.timetable(clubId: clubId, date: nil)
         }
         inFlight[clubId] = task
-        defer { inFlight[clubId] = nil }
-
-        let timetable = try await task.value
-        timetables[clubId] = timetable
-        return timetable
+        return task
     }
 
     func classInstance(clubId: String, classId: String) async throws -> ClassInstance? {
@@ -101,6 +108,9 @@ actor TimetableStore: TimetableStoreProtocol {
     }
 
     func invalidate() {
+        generation += 1
+        inFlight.values.forEach { $0.cancel() }
+        inFlight.removeAll()
         timetables.removeAll()
     }
 

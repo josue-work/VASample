@@ -193,4 +193,24 @@ struct TimetableStoreTests {
 
         #expect(api.timetableCalls == 2)
     }
+
+    @Test func invalidateDiscardsAFetchThatWasAlreadyInFlight() async throws {
+        let api = FakeClassesAPI()
+        api.timetableResults = [
+            .success(Fixtures.timetable(classes: [spin])),
+            .success(Fixtures.timetable(classes: [yoga]))
+        ]
+        api.timetableDelay = .milliseconds(300)
+        let store = makeStore(api)
+
+        let previousSession = Task { try await store.timetable(clubId: "club_sea_point", forceRefresh: true) }
+        try await Task.sleep(for: .milliseconds(50))
+        await store.invalidate()
+        await #expect(throws: (any Error).self) { try await previousSession.value }
+
+        let timetable = try await store.timetable(clubId: "club_sea_point", forceRefresh: false)
+        #expect(api.timetableCalls == 2)
+        #expect(timetable.classInstance(withId: spin.classId) == nil)
+        #expect(timetable.classInstance(withId: yoga.classId) != nil)
+    }
 }

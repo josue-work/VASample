@@ -24,7 +24,7 @@ struct ClassesDetailsView<ViewModel: ClassesDetailsViewModelProtocol>: View {
             Color.background.ignoresSafeArea()
             
             ScrollView(.vertical) {
-                Text(viewModel.classInstance.type.rawValue.uppercased())
+                Text(viewModel.classInstance.type == .unknown ? "CLASS" : viewModel.classInstance.type.rawValue.uppercased())
                     .font(.system(size: 12, weight: .bold))
                     .foregroundStyle(Color.white)
                     .padding(.horizontal, 12)
@@ -101,7 +101,7 @@ struct ClassesDetailsView<ViewModel: ClassesDetailsViewModelProtocol>: View {
                         foreground: Color.orange,
                         background: Color.orange.opacity(0.15)
                     )
-                case .none:
+                case .none, .unknown:
                     EmptyView()
                 }
 

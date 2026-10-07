@@ -46,7 +46,7 @@ Views (SwiftUI)  ->  ViewModels (protocol + live + mock)
    error decoding        session expiry
 ```
 
-- **Modules** (`Modules/Auth`, `Home`, `Classes`, `Classes Details`, `Tab Bar`): one folder per feature, with views and view models side by side.
+- **Modules** (`Modules/Auth`, `Home`, `Classes`, `Classes Details`, `TabBar`): one folder per feature, with views and view models side by side.
 - **View models:** each screen's view model sits behind a protocol, with a live implementation and a mock. Views are generic over the protocol, so every preview runs on mock data and never touches the network.
 - **Dependencies:** all dependencies come in through `init` as protocols (`AuthAPIProtocol`, `TimetableStoreProtocol`, `ReminderSchedulerProtocol`…). That's also what makes the view models easy to test.
 - **Navigation:** `AppRouter` owns the top-level route (sign-in or tabs) and the selected tab. Each tab has its own `NavigationStack`.
