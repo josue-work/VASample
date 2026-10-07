@@ -1,0 +1,87 @@
+name: Unit Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit-tests:
+    name: VASampleTests (iOS Simulator)
+    # GitHub-hosted macOS runners don't ship Xcode 27 yet, so this runs on a
+    # self-hosted Mac. The repo is public: only run for branches in this repo,
+    # never for fork PRs, so outside code can't execute on that machine.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, macOS]
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # The project is Xcode 27 format (objectVersion 110) and the test
+      # targets need an iOS 27 simulator. Uses DEVELOPER_DIR rather than
+      # `sudo xcode-select` so the runner never needs a password.
+      - name: Select Xcode 27
+        run: |
+          for app in /Applications/Xcode*.app; do
+            version=$(defaults read "$app/Contents/Info" CFBundleShortVersionString 2>/dev/null || true)
+            case "$version" in 27*) echo "$version $app" ;; esac
+          done | sort -V | tail -n 1 > "$RUNNER_TEMP/xcode.txt"
+          XCODE=$(cut -d' ' -f2- "$RUNNER_TEMP/xcode.txt")
+          if [ -z "$XCODE" ]; then
+            echo "::error::No Xcode 27 found on this runner. Available:"
+            ls -d /Applications/Xcode*.app
+            exit 1
+          fi
+          echo "DEVELOPER_DIR=$XCODE/Contents/Developer" >> "$GITHUB_ENV"
+          DEVELOPER_DIR="$XCODE/Contents/Developer" xcodebuild -version
+
+      - name: Pick an iOS simulator
+        id: sim
+        run: |
+          UDID=$(xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          runtimes = json.load(sys.stdin)["devices"]
+          ios = sorted(
+              (k for k in runtimes if ".SimRuntime.iOS-" in k and runtimes[k]),
+              key=lambda k: [int(p) for p in k.rsplit("iOS-", 1)[1].split("-")],
+          )
+          for runtime in reversed(ios):
+              for device in runtimes[runtime]:
+                  if device["name"].startswith("iPhone"):
+                      print(device["udid"]); sys.exit()
+          ')
+          if [ -z "$UDID" ]; then
+            echo "::error::No iPhone simulator available"
+            xcrun simctl list devices available
+            exit 1
+          fi
+          xcrun simctl list devices available | grep "$UDID"
+          echo "udid=$UDID" >> "$GITHUB_OUTPUT"
+
+      - name: Run unit tests
+        run: |
+          set -o pipefail
+          xcodebuild test \
+            -project VASample.xcodeproj \
+            -scheme VASample \
+            -destination "id=${{ steps.sim.outputs.udid }}" \
+            -only-testing:VASampleTests \
+            -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
+            | tee xcodebuild.log
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            ${{ runner.temp }}/TestResults.xcresult
+            xcodebuild.log
+          retention-days: 7
